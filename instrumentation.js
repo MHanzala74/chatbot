@@ -1,16 +1,40 @@
+
 import * as Sentry from "@sentry/nextjs";
 
 let telemetrySdk;
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    // Temps supplies the OTLP endpoint, protocol and authentication headers.
-    // Do not replace or hardcode those values here.
-    const hasOtlpEndpoint = Boolean(
-      process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
-        process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
-        process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ||
-        process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+    // Correct the Temps collector hostname while preserving its endpoint path.
+    const collectorHost =
+      process.env.TEMPS_OTEL_COLLECTOR_HOST || "192.168.9.47";
+
+    const endpointVariables = [
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ];
+
+    for (const variable of endpointVariables) {
+      const value = process.env[variable];
+
+      if (value) {
+        try {
+          const endpoint = new URL(value);
+
+          if (endpoint.hostname === "console.127-0-0-1.sslip.io") {
+            endpoint.hostname = collectorHost;
+            process.env[variable] = endpoint.toString();
+          }
+        } catch {
+          console.error(`[OTel] Invalid endpoint in ${variable}`);
+        }
+      }
+    }
+
+    const hasOtlpEndpoint = endpointVariables.some(
+      (variable) => Boolean(process.env[variable])
     );
 
     if (hasOtlpEndpoint) {
@@ -19,7 +43,6 @@ export async function register() {
       process.env.OTEL_LOGS_EXPORTER ||= "otlp";
       process.env.OTEL_EXPORTER_OTLP_PROTOCOL ||= "http/protobuf";
     } else {
-      // Keep local development quiet when no collector is configured.
       process.env.OTEL_TRACES_EXPORTER ||= "none";
       process.env.OTEL_METRICS_EXPORTER ||= "none";
       process.env.OTEL_LOGS_EXPORTER ||= "none";
@@ -40,11 +63,13 @@ export async function register() {
         "service.version": "1.0.0",
         "deployment.environment.name": process.env.NODE_ENV || "development",
       }),
-      instrumentations: [autoInstrumentationModule.getNodeAutoInstrumentations()],
+      instrumentations: [
+        autoInstrumentationModule.getNodeAutoInstrumentations(),
+      ],
     });
+
     telemetrySdk.start();
 
-    // Initialize Sentry after OpenTelemetry has registered its providers.
     await import("./sentry.server.config.js");
   }
 
@@ -53,6 +78,4 @@ export async function register() {
   }
 }
 
-// Next.js 15+ calls this for errors from server components, route handlers,
-// middleware and other request-scoped server work.
 export const onRequestError = Sentry.captureRequestError;
