@@ -1,76 +1,77 @@
-# Simple Chatbot (Next.js)
+# Simple Chatbot with Temps Observability
 
-A minimal chatbot: a chat UI plus a server route (`/api/chat`) that calls an
-LLM API. It works with **OpenAI, Google Gemini or Claude**. Your API key stays on
-the server and is never sent to the browser.
+A Next.js App Router chatbot supporting OpenAI, Google Gemini and Anthropic Claude. LLM API keys stay on the server.
 
-Flow: **push to GitHub → Temps pulls from GitHub → build → deploy.**
+## Observability included
 
-## 1. Get an API key (pick one)
+- **Temps Analytics:** automatic pageviews, page-leave, speed and engagement tracking, plus metadata-only chat events.
+- **OpenTelemetry:** Node.js auto-instrumentation, custom chat spans, request counters, duration histograms and structured logs. When deployed on Temps, the SDK uses the OTLP endpoint/protocol/headers injected by Temps. No endpoint or gateway is hardcoded.
+- **Sentry:** optional browser, Node.js and Edge error capture. Configure a Sentry project DSN to enable it.
+- **Privacy:** prompts, replies, API keys, provider response bodies and request bodies are not added to custom analytics events, custom OTel spans/metrics/logs or explicit Sentry error events. Session recording and Sentry Replay are disabled. Chat content is marked `rr-block` as an additional safeguard.
 
-| Provider | Where to get a key | Environment variable |
-| --- | --- | --- |
-| OpenAI | https://platform.openai.com/api-keys | `OPENAI_API_KEY` |
-| Gemini | https://aistudio.google.com/apikey | `GEMINI_API_KEY` |
-| Claude | https://console.anthropic.com | `ANTHROPIC_API_KEY` |
+## 1. Configure an LLM provider
 
-Set only the one you have. If you set several, add `LLM_PROVIDER` to choose.
+Set one of `OPENAI_API_KEY`, `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` in your local `.env.local` or Temps project environment. Optionally set `LLM_PROVIDER`, `LLM_MODEL` and `SYSTEM_PROMPT`.
 
 ## 2. Run locally
 
 ```bash
 npm install
-cp .env.example .env.local     # then fill in your key
-npm run dev                    # http://localhost:3000
+cp .env.example .env.local
+# Add one LLM API key to .env.local
+npm run dev
 ```
 
-## 3. Push to GitHub
+Open `http://localhost:3000`. Local OTel exporters remain disabled unless an OTLP endpoint is configured. Temps Analytics ignores localhost by default.
 
-Create an empty GitHub repo (e.g. `temps-chatbot`), then run:
+Health endpoint: `GET /api/health` returns `{ "status": "ok" }`.
+
+## 3. Configure Temps
+
+Connect the repository to Temps and deploy the Dockerfile on port `3000`.
+
+Set the LLM provider key in the Temps project environment. Temps should inject its own `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` and `OTEL_EXPORTER_OTLP_HEADERS`. The app reads these values and does not hardcode a Docker gateway, hostname, token or endpoint.
+
+The OpenTelemetry SDK selects OTLP exporters for traces, metrics and logs when an OTLP endpoint is present. If no endpoint is present, those exporters are disabled to avoid sending to an assumed localhost collector.
+
+## 4. Configure Sentry (optional)
+
+Create a Sentry project for Next.js and add its DSN to both:
+
+- `SENTRY_DSN` for Node.js/Edge server errors.
+- `NEXT_PUBLIC_SENTRY_DSN` for browser errors.
+
+Do not put a Sentry auth token in either DSN variable. Source-map upload is not configured because it requires a separate Sentry organization/project/auth-token setup.
+
+## 5. Analytics events
+
+The client sends these event names with metadata only:
+
+- `chat_started`
+- `message_sent` (message count only)
+- `response_received` (message count and latency only)
+- `chat_error` (generic error category only)
+- `conversation_cleared` (message count only)
+
+No prompt or assistant response text is sent to Temps Analytics.
+
+## 6. Deploy
 
 ```bash
-git init
 git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/<your-username>/temps-chatbot.git
-git push -u origin main
+git commit -m "Add Temps analytics and observability"
+git push
 ```
 
-`.env.local` is git-ignored, so your key will not be pushed.
+Temps can then build and deploy the pushed revision. Confirm traces, metrics and logs separately in the Temps dashboard; adding exporters does not itself prove that the remote collector accepted the data.
 
-## 4. Deploy on Temps
+## 7. Verify before deployment
 
-If your Temps server is not set up yet, run this once on a fresh Ubuntu VPS:
+Run the automated source checks and production build together:
 
 ```bash
-curl -fsSL https://temps.sh/deploy.sh | bash
+npm ci
+npm run verify
 ```
 
-Then in the Temps console:
-
-1. Click **New project** and connect your `temps-chatbot` repo from GitHub.
-2. Choose the `main` branch. Temps builds from the `Dockerfile` (port `3000`).
-3. Add your key as an environment variable in the project settings
-   (e.g. `OPENAI_API_KEY` or `GEMINI_API_KEY`). Without it the chat shows an error.
-4. Deploy. Temps gives you a URL, and every `git push` redeploys automatically.
-
-Docs: https://temps.sh/docs/your-first-deployment
-
-## Configuration (environment variables)
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | One of them | Your API key |
-| `LLM_PROVIDER` | No | `openai`, `gemini` or `anthropic`. Only needed if several keys are set |
-| `LLM_MODEL` | No | Override the model. Defaults: `gpt-4o-mini`, `gemini-2.5-flash`, `claude-sonnet-5-5` |
-| `SYSTEM_PROMPT` | No | Changes the bot's personality or instructions |
-
-## Files
-
-| File | Purpose |
-| --- | --- |
-| `app/page.js` | Chat UI |
-| `app/api/chat/route.js` | Server route that calls OpenAI, Gemini or Claude |
-| `Dockerfile` | Production build (Next.js standalone) |
-| `.env.example` | Example environment variables |
+The `start` script is cross-platform and uses the platform-provided `PORT` value, falling back to `3000` for local use. Do not hardcode a port in the Temps project configuration.
